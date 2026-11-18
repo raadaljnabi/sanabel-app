@@ -1,0 +1,36 @@
+plugins {
+    id 'com.android.application'
+}
+
+def runNum = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger()
+
+android {
+    namespace 'com.cakeshow.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.cakeshow.app'
+        minSdk 21
+        targetSdk 34
+        versionCode runNum
+        versionName "1.${runNum}"
+    }
+
+    // Fixed signing key so every new version installs as an update over the old one without losing data
+    signingConfigs {
+        fixed {
+            storeFile file('cake.keystore')
+            storePassword 'cake1234'
+            keyAlias 'cake'
+            keyPassword 'cake1234'
+        }
+    }
+    buildTypes {
+        debug { signingConfig signingConfigs.fixed }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
