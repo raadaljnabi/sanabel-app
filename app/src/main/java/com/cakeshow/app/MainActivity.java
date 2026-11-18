@@ -73,6 +73,8 @@ public class MainActivity extends Activity {
         super.onCreate(state);
         // Keep the screen on (display mode in the shop)
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // Android 13+: ask once for permission to show notifications (orders, maintenance...)
+        if (Build.VERSION.SDK_INT >= 33) { try { if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7); } catch (Exception e) {} }
 
         // Needed to capture the whole receipt as an image
         if (Build.VERSION.SDK_INT >= 21) WebView.enableSlowWholeDocumentDraw();
@@ -196,6 +198,14 @@ public class MainActivity extends Activity {
             public void saveFile(final String data, final String name, final boolean share) {
                 runOnUiThread(new Runnable() {
                     @Override public void run() { saveBackup(data, name, share); }
+                });
+            }
+
+            // System notification + vibration for important work (new order, delivery, maintenance)
+            @JavascriptInterface
+            public void notify(final String title, final String body, final boolean urgent) {
+                runOnUiThread(new Runnable() {
+                    @Override public void run() { showNote(title, body, urgent); }
                 });
             }
 
@@ -638,6 +648,34 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             Toast.makeText(this, "تعذر حفظ النسخة الاحتياطية", Toast.LENGTH_LONG).show();
         }
+    }
+
+    private int noteId = 100;
+    private void showNote(String title, String body, boolean urgent) {
+        try {
+            android.app.NotificationManager nm = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            String ch = urgent ? "sanabel_urgent" : "sanabel_work";
+            if (Build.VERSION.SDK_INT >= 26) {
+                android.app.NotificationChannel c = new android.app.NotificationChannel(ch, urgent ? "تنبيهات عاجلة" : "تنبيهات الشغل",
+                        urgent ? android.app.NotificationManager.IMPORTANCE_HIGH : android.app.NotificationManager.IMPORTANCE_DEFAULT);
+                c.enableVibration(true); c.setVibrationPattern(new long[]{0, 400, 200, 400});
+                nm.createNotificationChannel(c);
+            }
+            Intent it = new Intent(this, MainActivity.class); it.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            int pf = 0; if (Build.VERSION.SDK_INT >= 23) pf = android.app.PendingIntent.FLAG_IMMUTABLE;
+            android.app.PendingIntent pi = android.app.PendingIntent.getActivity(this, 0, it, pf);
+            android.app.Notification.Builder b;
+            if (Build.VERSION.SDK_INT >= 26) b = new android.app.Notification.Builder(this, ch); else b = new android.app.Notification.Builder(this);
+            b.setSmallIcon(getApplicationInfo().icon).setContentTitle(title).setContentText(body).setAutoCancel(true).setContentIntent(pi)
+                    .setStyle(new android.app.Notification.BigTextStyle().bigText(body));
+            if (Build.VERSION.SDK_INT < 26) { b.setDefaults(android.app.Notification.DEFAULT_ALL); if (urgent) b.setPriority(android.app.Notification.PRIORITY_HIGH); }
+            nm.notify(noteId++, b.build());
+            if (noteId > 150) noteId = 100;
+        } catch (Exception e) { }
+        try {
+            android.os.Vibrator v = (android.os.Vibrator) getSystemService(VIBRATOR_SERVICE);
+            if (v != null) { if (Build.VERSION.SDK_INT >= 26) v.vibrate(android.os.VibrationEffect.createWaveform(new long[]{0, 300, 150, 300}, -1)); else v.vibrate(new long[]{0, 300, 150, 300}, -1); }
+        } catch (Exception e) { }
     }
 
     private void saveImg(String dataUrl, String name, boolean share) {
