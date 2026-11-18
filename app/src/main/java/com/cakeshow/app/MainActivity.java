@@ -199,6 +199,14 @@ public class MainActivity extends Activity {
                 });
             }
 
+            // Customer photo at full resolution: save to the gallery (Pictures/Sanabel) or share to a printer app
+            @JavascriptInterface
+            public void saveImage(final String dataUrl, final String name, final boolean share) {
+                runOnUiThread(new Runnable() {
+                    @Override public void run() { saveImg(dataUrl, name, share); }
+                });
+            }
+
             // Send the receipt as a PDF straight to the customer's WhatsApp
             @JavascriptInterface
             public void sharePdf(final String html, final String phone, final String no, final String caption) {
@@ -629,6 +637,42 @@ public class MainActivity extends Activity {
             startActivity(Intent.createChooser(i, "حفظ النسخة الاحتياطية"));
         } catch (Exception e) {
             Toast.makeText(this, "تعذر حفظ النسخة الاحتياطية", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void saveImg(String dataUrl, String name, boolean share) {
+        try {
+            String b64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+            byte[] bytes = Base64.decode(b64, Base64.DEFAULT);
+            String fn = name.endsWith(".jpg") ? name : name + ".jpg";
+            if (!share && Build.VERSION.SDK_INT >= 29) {
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.Images.Media.DISPLAY_NAME, fn);
+                cv.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+                cv.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Sanabel");
+                Uri u = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+                if (u != null) {
+                    OutputStream os = getContentResolver().openOutputStream(u);
+                    os.write(bytes);
+                    os.close();
+                    Toast.makeText(this, "انحفظت الصورة بالمعرض / Sanabel", Toast.LENGTH_LONG).show();
+                    return;
+                }
+            }
+            // Share to a printer app (Canon PRINT, Epson...) or older Android versions
+            File dir = new File(getCacheDir(), "receipts");
+            dir.mkdirs();
+            File f = new File(dir, fn);
+            FileOutputStream out = new FileOutputStream(f);
+            out.write(bytes);
+            out.close();
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType("image/jpeg");
+            i.putExtra(Intent.EXTRA_STREAM, Uri.parse("content://" + ReceiptProvider.AUTH + "/" + fn));
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(i, share ? "افتح الصورة ببرنامج الطابعة" : "حفظ الصورة"));
+        } catch (Exception e) {
+            Toast.makeText(this, "تعذر حفظ الصورة", Toast.LENGTH_LONG).show();
         }
     }
 

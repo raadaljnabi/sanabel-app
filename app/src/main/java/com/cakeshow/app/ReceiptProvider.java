@@ -32,7 +32,7 @@ public class ReceiptProvider extends ContentProvider {
 
     @Override public String getType(Uri uri) {
         String n = uri.getLastPathSegment();
-        return (n != null && n.endsWith(".json")) ? "application/json" : "application/pdf";
+        return n == null ? "application/pdf" : n.endsWith(".json") ? "application/json" : n.endsWith(".jpg") ? "image/jpeg" : "application/pdf";
     }
 
     @Override
