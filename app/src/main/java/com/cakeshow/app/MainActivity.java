@@ -73,6 +73,8 @@ public class MainActivity extends Activity {
         super.onCreate(state);
         // Keep the screen on (display mode in the shop)
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // Android 13+: ask once for permission to show notifications (orders, maintenance...)
+        if (Build.VERSION.SDK_INT >= 33) { try { if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7); } catch (Exception e) {} }
 
         // Needed to capture the whole receipt as an image
         if (Build.VERSION.SDK_INT >= 21) WebView.enableSlowWholeDocumentDraw();
@@ -199,6 +201,38 @@ public class MainActivity extends Activity {
                 });
             }
 
+            // Any file (Excel, backup...) as base64: saved in Downloads/Sanabel or shared
+            @JavascriptInterface
+            public void saveBin(final String b64, final String name, final String mime, final boolean share) {
+                runOnUiThread(new Runnable() {
+                    @Override public void run() { saveBinImpl(b64, name, mime, share); }
+                });
+            }
+
+            // Push (FCM) token for this device, so the server can notify it when the app is closed
+            @JavascriptInterface
+            public String pushToken() { return pushTok; }
+
+            // Page opened from a tapped notification (e.g. "mt", "k_ord")
+            @JavascriptInterface
+            public String pendingGo() { String g = pendingGo; pendingGo = ""; return g; }
+
+            // System notification + vibration for important work (new order, delivery, maintenance)
+            @JavascriptInterface
+            public void notify(final String title, final String body, final boolean urgent) {
+                runOnUiThread(new Runnable() {
+                    @Override public void run() { showNote(title, body, urgent); }
+                });
+            }
+
+            // Customer photo at full resolution: save to the gallery (Pictures/Sanabel) or share to a printer app
+            @JavascriptInterface
+            public void saveImage(final String dataUrl, final String name, final boolean share) {
+                runOnUiThread(new Runnable() {
+                    @Override public void run() { saveImg(dataUrl, name, share); }
+                });
+            }
+
             // Send the receipt as a PDF straight to the customer's WhatsApp
             @JavascriptInterface
             public void sharePdf(final String html, final String phone, final String no, final String caption) {
@@ -258,6 +292,8 @@ public class MainActivity extends Activity {
 
         if (state != null) web.restoreState(state);
         else web.loadUrl("file:///android_asset/start.html");
+        readGo(getIntent());
+        initPush();
 
         hideBars();
     }
@@ -629,6 +665,132 @@ public class MainActivity extends Activity {
             startActivity(Intent.createChooser(i, "حفظ النسخة الاحتياطية"));
         } catch (Exception e) {
             Toast.makeText(this, "تعذر حفظ النسخة الاحتياطية", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void saveBinImpl(String b64, String name, String mime, boolean share) {
+        try {
+            byte[] bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+            if (!share && Build.VERSION.SDK_INT >= 29) {
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.Downloads.DISPLAY_NAME, name);
+                cv.put(MediaStore.Downloads.MIME_TYPE, mime);
+                cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Sanabel");
+                Uri u = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                if (u != null) {
+                    OutputStream os = getContentResolver().openOutputStream(u);
+                    os.write(bytes);
+                    os.close();
+                    Toast.makeText(this, "انحفظ بمجلد التنزيلات / Sanabel", Toast.LENGTH_LONG).show();
+                    return;
+                }
+            }
+            File dir = new File(getCacheDir(), "receipts");
+            dir.mkdirs();
+            File f = new File(dir, name);
+            FileOutputStream out = new FileOutputStream(f);
+            out.write(bytes);
+            out.close();
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType(mime);
+            i.putExtra(Intent.EXTRA_STREAM, Uri.parse("content://" + ReceiptProvider.AUTH + "/" + name));
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(i, "حفظ أو مشاركة الملف"));
+        } catch (Exception e) {
+            Toast.makeText(this, "تعذر حفظ الملف", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private String pushTok = "", pendingGo = "";
+    private void readGo(Intent it) { try { if (it != null && it.getStringExtra("go") != null) pendingGo = it.getStringExtra("go"); } catch (Exception e) { } }
+    @Override protected void onNewIntent(Intent it) {
+        super.onNewIntent(it); setIntent(it); readGo(it);
+        if (!pendingGo.isEmpty() && web != null) { final String g = pendingGo.replace("'", ""); pendingGo = ""; web.evaluateJavascript("window.onPushGo&&onPushGo('" + g + "')", null); }
+    }
+    private void makeChannels() {
+        if (Build.VERSION.SDK_INT < 26) return;
+        try {
+            android.app.NotificationManager nm = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            android.app.NotificationChannel u = new android.app.NotificationChannel("sanabel_urgent", "تنبيهات عاجلة", android.app.NotificationManager.IMPORTANCE_HIGH);
+            u.enableVibration(true); u.setVibrationPattern(new long[]{0, 400, 200, 400}); nm.createNotificationChannel(u);
+            android.app.NotificationChannel w = new android.app.NotificationChannel("sanabel_work", "تنبيهات الشغل", android.app.NotificationManager.IMPORTANCE_DEFAULT);
+            nm.createNotificationChannel(w);
+        } catch (Exception e) { }
+    }
+    // Works only when app/google-services.json was added before building; otherwise it is skipped quietly
+    private void initPush() {
+        makeChannels();
+        try {
+            com.google.firebase.messaging.FirebaseMessaging.getInstance().getToken().addOnCompleteListener(new com.google.android.gms.tasks.OnCompleteListener<String>() {
+                @Override public void onComplete(com.google.android.gms.tasks.Task<String> t) {
+                    if (!t.isSuccessful() || t.getResult() == null) return;
+                    pushTok = t.getResult();
+                    runOnUiThread(new Runnable() { @Override public void run() { if (web != null) web.evaluateJavascript("window.onPushToken&&onPushToken('" + pushTok + "')", null); } });
+                }
+            });
+        } catch (Throwable e) { }
+    }
+    private int noteId = 100;
+    private void showNote(String title, String body, boolean urgent) {
+        try {
+            android.app.NotificationManager nm = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            String ch = urgent ? "sanabel_urgent" : "sanabel_work";
+            if (Build.VERSION.SDK_INT >= 26) {
+                android.app.NotificationChannel c = new android.app.NotificationChannel(ch, urgent ? "تنبيهات عاجلة" : "تنبيهات الشغل",
+                        urgent ? android.app.NotificationManager.IMPORTANCE_HIGH : android.app.NotificationManager.IMPORTANCE_DEFAULT);
+                c.enableVibration(true); c.setVibrationPattern(new long[]{0, 400, 200, 400});
+                nm.createNotificationChannel(c);
+            }
+            Intent it = new Intent(this, MainActivity.class); it.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            int pf = 0; if (Build.VERSION.SDK_INT >= 23) pf = android.app.PendingIntent.FLAG_IMMUTABLE;
+            android.app.PendingIntent pi = android.app.PendingIntent.getActivity(this, 0, it, pf);
+            android.app.Notification.Builder b;
+            if (Build.VERSION.SDK_INT >= 26) b = new android.app.Notification.Builder(this, ch); else b = new android.app.Notification.Builder(this);
+            b.setSmallIcon(getApplicationInfo().icon).setContentTitle(title).setContentText(body).setAutoCancel(true).setContentIntent(pi)
+                    .setStyle(new android.app.Notification.BigTextStyle().bigText(body));
+            if (Build.VERSION.SDK_INT < 26) { b.setDefaults(android.app.Notification.DEFAULT_ALL); if (urgent) b.setPriority(android.app.Notification.PRIORITY_HIGH); }
+            nm.notify(noteId++, b.build());
+            if (noteId > 150) noteId = 100;
+        } catch (Exception e) { }
+        try {
+            android.os.Vibrator v = (android.os.Vibrator) getSystemService(VIBRATOR_SERVICE);
+            if (v != null) { if (Build.VERSION.SDK_INT >= 26) v.vibrate(android.os.VibrationEffect.createWaveform(new long[]{0, 300, 150, 300}, -1)); else v.vibrate(new long[]{0, 300, 150, 300}, -1); }
+        } catch (Exception e) { }
+    }
+
+    private void saveImg(String dataUrl, String name, boolean share) {
+        try {
+            String b64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+            byte[] bytes = Base64.decode(b64, Base64.DEFAULT);
+            String fn = name.endsWith(".jpg") ? name : name + ".jpg";
+            if (!share && Build.VERSION.SDK_INT >= 29) {
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.Images.Media.DISPLAY_NAME, fn);
+                cv.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+                cv.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Sanabel");
+                Uri u = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+                if (u != null) {
+                    OutputStream os = getContentResolver().openOutputStream(u);
+                    os.write(bytes);
+                    os.close();
+                    Toast.makeText(this, "انحفظت الصورة بالمعرض / Sanabel", Toast.LENGTH_LONG).show();
+                    return;
+                }
+            }
+            // Share to a printer app (Canon PRINT, Epson...) or older Android versions
+            File dir = new File(getCacheDir(), "receipts");
+            dir.mkdirs();
+            File f = new File(dir, fn);
+            FileOutputStream out = new FileOutputStream(f);
+            out.write(bytes);
+            out.close();
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType("image/jpeg");
+            i.putExtra(Intent.EXTRA_STREAM, Uri.parse("content://" + ReceiptProvider.AUTH + "/" + fn));
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(i, share ? "افتح الصورة ببرنامج الطابعة" : "حفظ الصورة"));
+        } catch (Exception e) {
+            Toast.makeText(this, "تعذر حفظ الصورة", Toast.LENGTH_LONG).show();
         }
     }
 

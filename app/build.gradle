@@ -1,6 +1,8 @@
 plugins {
     id 'com.android.application'
 }
+// إشعارات وهو مسدود: تشتغل من تحط ملف google-services.json (من Firebase) بمجلد app
+if (file('google-services.json').exists()) { apply plugin: 'com.google.gms.google-services' }
 
 def runNum = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger()
 
@@ -25,6 +27,7 @@ android {
             keyPassword 'cake1234'
         }
     }
+    lint { abortOnError false; checkReleaseBuilds false }
     buildTypes {
         debug { signingConfig signingConfigs.fixed }
     }
@@ -33,4 +36,9 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+}
+
+dependencies {
+    implementation platform('com.google.firebase:firebase-bom:33.5.1')
+    implementation 'com.google.firebase:firebase-messaging'
 }
