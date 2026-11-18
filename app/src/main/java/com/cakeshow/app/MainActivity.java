@@ -201,6 +201,14 @@ public class MainActivity extends Activity {
                 });
             }
 
+            // Push (FCM) token for this device, so the server can notify it when the app is closed
+            @JavascriptInterface
+            public String pushToken() { return pushTok; }
+
+            // Page opened from a tapped notification (e.g. "mt", "k_ord")
+            @JavascriptInterface
+            public String pendingGo() { String g = pendingGo; pendingGo = ""; return g; }
+
             // System notification + vibration for important work (new order, delivery, maintenance)
             @JavascriptInterface
             public void notify(final String title, final String body, final boolean urgent) {
@@ -276,6 +284,8 @@ public class MainActivity extends Activity {
 
         if (state != null) web.restoreState(state);
         else web.loadUrl("file:///android_asset/start.html");
+        readGo(getIntent());
+        initPush();
 
         hideBars();
     }
@@ -650,6 +660,35 @@ public class MainActivity extends Activity {
         }
     }
 
+    private String pushTok = "", pendingGo = "";
+    private void readGo(Intent it) { try { if (it != null && it.getStringExtra("go") != null) pendingGo = it.getStringExtra("go"); } catch (Exception e) { } }
+    @Override protected void onNewIntent(Intent it) {
+        super.onNewIntent(it); setIntent(it); readGo(it);
+        if (!pendingGo.isEmpty() && web != null) { final String g = pendingGo.replace("'", ""); pendingGo = ""; web.evaluateJavascript("window.onPushGo&&onPushGo('" + g + "')", null); }
+    }
+    private void makeChannels() {
+        if (Build.VERSION.SDK_INT < 26) return;
+        try {
+            android.app.NotificationManager nm = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            android.app.NotificationChannel u = new android.app.NotificationChannel("sanabel_urgent", "تنبيهات عاجلة", android.app.NotificationManager.IMPORTANCE_HIGH);
+            u.enableVibration(true); u.setVibrationPattern(new long[]{0, 400, 200, 400}); nm.createNotificationChannel(u);
+            android.app.NotificationChannel w = new android.app.NotificationChannel("sanabel_work", "تنبيهات الشغل", android.app.NotificationManager.IMPORTANCE_DEFAULT);
+            nm.createNotificationChannel(w);
+        } catch (Exception e) { }
+    }
+    // Works only when app/google-services.json was added before building; otherwise it is skipped quietly
+    private void initPush() {
+        makeChannels();
+        try {
+            com.google.firebase.messaging.FirebaseMessaging.getInstance().getToken().addOnCompleteListener(new com.google.android.gms.tasks.OnCompleteListener<String>() {
+                @Override public void onComplete(com.google.android.gms.tasks.Task<String> t) {
+                    if (!t.isSuccessful() || t.getResult() == null) return;
+                    pushTok = t.getResult();
+                    runOnUiThread(new Runnable() { @Override public void run() { if (web != null) web.evaluateJavascript("window.onPushToken&&onPushToken('" + pushTok + "')", null); } });
+                }
+            });
+        } catch (Throwable e) { }
+    }
     private int noteId = 100;
     private void showNote(String title, String body, boolean urgent) {
         try {
